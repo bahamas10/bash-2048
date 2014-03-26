@@ -1,0 +1,447 @@
+#!/usr/bin/env bash
+#
+# 2048 clone in pure bash
+#
+# Author: Dave Eddy <dave@daveeddy.com>
+# Date: 3/25/14
+# License: MIT
+
+board=()  # the gameboard, as a 1D array
+colors=() # colors for numbers
+moves=0   # number of moves
+
+usage() {
+	local prog=${0##*/}
+	cat <<-EOF
+	Usage: $prog [-a] [-b] [-h] [-g <goal>] [-s <size>]
+
+	Options
+	  -a          enable animations, note they are slow and weird
+	  -b          disable color output, b for boring!
+	  -g <goal>   the goal piece, defaults to $goal
+	  -h          print this message and exit
+	  -s <size>   the size of the board, defaults to $size
+	EOF
+}
+
+animation=false
+color=true
+goal=2048
+size=4
+while getopts 'abg:hs:' option; do
+	case "$option" in
+		a) animation=true;;
+		b) color=false;;
+		g) goal=$OPTARG;;
+		h) usage; exit 0;;
+		s) size=$OPTARG;;
+		*) usage >&2; exit 1;;
+	esac
+done
+
+if $color; then
+	colors[0]=$(tput sgr0)    # i hijack 1 and 2 for reset and bold
+	colors[1]=$(tput bold)
+	colors[2]=$(tput setab 1)
+	colors[4]=$(tput setab 2)
+	colors[8]=$(tput setab 3)
+	colors[16]=$(tput setab 4)
+	colors[32]=$(tput setab 5)
+	colors[64]=$(tput setab 6)
+	colors[128]=$(tput setab 7)
+	colors[256]=$(tput setab 4)
+	colors[512]=$(tput setab 5)
+	colors[1024]=$(tput setab 2)
+	colors[2048]=$(tput rev)
+fi
+
+initialize() {
+	moves=0
+	for ((i = 0; i < size*size; i++)); do
+		board[i]=
+	done
+	clear
+}
+
+# take a 2d index and return the 1d index
+index2d() {
+	local x=$1
+	local y=$2
+	if ((x < 0 || y < 0 || x >= size || y >= size)); then
+		echo -1
+		return 1
+	fi
+	echo "$((size * y + x))"
+}
+
+# take a 1d index and return the 2d index
+# in the form 'x y'
+index1d() {
+	local index=$1
+	local x=$((index % size))
+	local y=$((index / size))
+	echo "$x $y"
+}
+
+# center a string in a given padding
+center_string() {
+	local s=$1
+	local len=$2
+	local slen=${#s}
+	local start=$(((len - slen) / 2))
+	local ret=''
+	local i=0
+	for ((i = 0; i < start; i++)); do
+		ret+=' '
+	done
+	ret+=$s
+	for ((i = start + slen; i < len; i++)); do
+		ret+=' '
+	done
+	echo "$ret"
+}
+
+# print the gameboard
+print_board() {
+	# we buffer the gameboard output before showing the user anything.  this way,
+	# we minimize the amount of time it takes to draw to the terminal
+	local output=$(_print_board "$@")
+	clear
+	echo "$output"
+	echo
+}
+_print_board() {
+	local direction=$1
+	local x= y= piece=
+
+	echo "2048 bash - $moves moves - ctrl-c to exit"
+	echo
+	for ((x = 0; x < size; x++)); do
+		echo -n '|'
+		for ((y = 0; y < size; y++)); do
+			echo -n "----------|"
+		done
+		echo
+		echo -n '|'
+		for ((y = 0; y < size; y++)); do
+			piece=${board[$(index2d "$x" "$y")]}
+			echo -n "${colors[$piece]}          ${colors[0]}|"
+		done
+		echo
+		echo -n '|'
+		for ((y = 0; y < size; y++)); do
+			piece=${board[$(index2d "$x" "$y")]}
+			echo -n "${colors[$piece]}${colors[1]}$(center_string "$piece" 10)${colors[0]}|"
+		done
+		echo
+		echo -n '|'
+		for ((y = 0; y < size; y++)); do
+			piece=${board[$(index2d "$x" "$y")]}
+			echo -n "${colors[$piece]}          ${colors[0]}|"
+		done
+		echo
+	done
+	echo -n '|'
+	for ((y = 0; y < size; y++)); do
+		echo -n "----------|"
+	done
+	echo
+	[[ -n $direction ]] && echo "$direction"
+}
+
+# create a new piece
+create_game_piece() {
+	local unusedindices=() piece=
+	# find unused spots
+	for ((i = 0; i < size*size; i++)); do
+		piece=${board[i]}
+		[[ -z $piece ]] && unusedindices=("${unusedindices[@]}" "$i")
+	done
+	# failed to find an unused spot
+	if ((${#unusedindices[@]} == 0)); then
+		return 1
+	fi
+	# randomly pick a spot and give it a piece
+	local randomindex=${unusedindices[$RANDOM % ${#unusedindices[@]}]}
+	board[randomindex]=2
+
+	return 0
+}
+
+# wait for user input
+keypress() {
+	local data=
+	read -srn 3 data
+	local key=${data:2}
+	case "$key" in
+		A) echo 'up';;
+		B) echo 'down';;
+		C) echo 'right';;
+		D) echo 'left';;
+		*) echo 'unknown';;
+	esac
+}
+
+# move the board in a direction
+# return 0 if the board moves, non-0 if nothing happens
+move_board() {
+	local direction=$1
+	# copy the board
+	local oboard=("${board[@]}")
+
+	# move the board
+	move_pieces "$direction"
+	merge_pieces "$direction"
+	move_pieces "$direction"
+
+	# check to see if the board has changed
+	local piece opiece i
+	for ((i = 0; i < ${#board[@]}; i++)); do
+		piece=${board[i]}
+		opiece=${oboard[i]}
+
+		# if these are different, the board has changed
+		((piece != opiece)) && return 0
+	done
+	return 1
+}
+
+# move the pieces of a board in a given direction
+move_pieces() {
+	local direction=$1
+	local x= y=
+	case "$direction" in
+		up)
+			for ((x = 0; x < size; x++)); do
+				for ((y = 0; y < size; y++)); do
+					move_piece "$x" "$y" "$direction"
+				done
+			done
+			;;
+		down)
+			for ((x = size - 1; x >= 0; x--)); do
+				for ((y = 0; y < size; y++)); do
+					move_piece "$x" "$y" "$direction"
+				done
+			done
+			;;
+		left)
+			for ((x = 0; x < size; x++)); do
+				for ((y = 0; y < size; y++)); do
+					move_piece "$x" "$y" "$direction"
+				done
+			done
+			;;
+		right)
+			for ((x = 0; x < size; x++)); do
+				for ((y = size - 1; y >= 0; y--)); do
+					move_piece "$x" "$y" "$direction"
+				done
+			done
+			;;
+	esac
+}
+
+# move a piece in a direction
+move_piece() {
+	local x=$1
+	local y=$2
+	local direction=$3
+
+	local opiece=
+	while true; do
+		local pieceindex=$(index2d "$x" "$y")
+		out_of_bounds "$pieceindex" && return
+
+		piece=${board[pieceindex]}
+		[[ -n $piece ]] || return
+
+		local ox oy
+		case "$direction" in
+			up) ox=$((x-1)); oy=$y;;
+			down) ox=$((x+1)); oy=$y;;
+			left) ox=$x; oy=$((y-1));;
+			right) ox=$x; oy=$((y+1));;
+		esac
+		local opieceindex=$(index2d "$ox" "$oy")
+		out_of_bounds "$opieceindex" && return
+
+		opiece=${board[opieceindex]}
+
+		# stop trying if the other piece is something
+		[[ -n $opiece ]] && return
+
+		# swap the pieces
+		board[opieceindex]=${board[pieceindex]}
+		board[pieceindex]=
+
+		$animation && print_board
+
+		x=$ox
+		y=$oy
+		((i++))
+	done
+}
+
+# merge near pieces
+merge_pieces() {
+	local direction=$1
+	local x= y=
+	case "$direction" in
+		up)
+			for ((x = 0; x < size; x++)); do
+				for ((y = 0; y < size; y++)); do
+					merge_piece "$x" "$y" "$direction"
+				done
+			done
+			;;
+		down)
+			for ((x = size - 1; x >= 0; x--)); do
+				for ((y = 0; y < size; y++)); do
+					merge_piece "$x" "$y" "$direction"
+				done
+			done
+			;;
+		left)
+			for ((x = 0; x < size; x++)); do
+				for ((y = 0; y < size; y++)); do
+					merge_piece "$x" "$y" "$direction"
+				done
+			done
+			;;
+		right)
+			for ((x = 0; x < size; x++)); do
+				for ((y = size - 1; y >= 0; y--)); do
+					merge_piece "$x" "$y" "$direction"
+				done
+			done
+			;;
+	esac
+}
+
+# merge a piece in a direction
+merge_piece() {
+	local x=$1
+	local y=$2
+	local direction=$3
+
+	local pieceindex=$(index2d "$x" "$y")
+	out_of_bounds "$pieceindex" && return
+
+	local piece=${board[pieceindex]}
+	[[ -n $piece ]] || return
+
+	local ox= oy=
+	case "$direction" in
+		up) ox=$((x-1)); oy=$y;;
+		down) ox=$((x+1)); oy=$y;;
+		left) ox=$x; oy=$((y-1));;
+		right) ox=$x; oy=$((y+1));;
+	esac
+	local opieceindex=$(index2d "$ox" "$oy")
+	out_of_bounds "$opieceindex" && return
+
+	local opiece=${board[opieceindex]}
+	[[ -n $opiece ]] || return
+
+	if ((piece == opiece)); then
+		# merge pieces
+		board[opieceindex]=$((piece + opiece))
+		board[pieceindex]=
+	fi
+}
+
+# check if an index is out of bounds
+out_of_bounds() {
+	local index=$1
+	((index < 0 || index >= size*size))
+}
+
+# check if we have move lefts
+have_moves_left() {
+	local i=
+	for ((i = 0; i < size*size; i++)); do
+		# if we have 1 empty space, we have move lefts
+		[[ -z ${board[i]} ]] && return 0
+	done
+	local x= y= piece= pieceindex= opiece= opieceindex=
+	for ((x = 0; x < size; x++)); do
+		for ((y = 0; y < size; y++)); do
+			pieceindex=$(index2d "$x" "$y")
+			piece=${board[pieceindex]}
+
+			# check north
+			opieceindex=$(index2d "$x" "$((y-1))")
+			if ! out_of_bounds "$opieceindex"; then
+				opiece=${board[opieceindex]}
+				((opiece == piece)) && return 0
+			fi
+			# check south
+			opieceindex=$(index2d "$x" "$((y+1))")
+			if ! out_of_bounds "$opieceindex"; then
+				opiece=${board[opieceindex]}
+				((opiece == piece)) && return 0
+			fi
+			# check east
+			opieceindex=$(index2d "$((x+1))" "$y")
+			if ! out_of_bounds "$opieceindex"; then
+				opiece=${board[opieceindex]}
+				((opiece == piece)) && return 0
+			fi
+			# check west
+			opieceindex=$(index2d "$((x-1))" "$y")
+			if ! out_of_bounds "$opieceindex"; then
+				opiece=${board[opieceindex]}
+				((opiece == piece)) && return 0
+			fi
+		done
+	done
+	return 1
+}
+
+win() {
+	print_board
+	echo "congratulations! you won in $moves moves"
+	exit 0
+}
+
+lose() {
+	print_board
+	echo 'you lose! - try again'
+	sleep 1
+	exit 1
+}
+
+
+# initialize the game
+initialize           # create the gameboard array and get things started
+create_game_piece    # create the first piece on the gameboard
+create_game_piece    # create the second piece on the gameboard
+
+# enter the game loop
+while true; do
+	# generate the output
+	print_board "$direction"
+
+	# wait until keypress
+	direction=$(keypress)
+
+	# move the board and check for merges
+	move_board "$direction" || continue
+
+	# increment moves
+	((moves++))
+
+	# check for win
+	for ((i = 0; i < size*size; i++)); do
+		if ((${board[i]:-0} == goal)); then
+			win
+		fi
+	done
+
+	# generate a new piece
+	create_game_piece
+
+	# check for loss
+	have_moves_left || lose
+done
