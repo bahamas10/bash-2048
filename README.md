@@ -3,7 +3,7 @@ bash 2048
 
 My take at http://gabrielecirulli.github.io/2048/ in pure bash
 
-![screenshot][screenshot.png]
+![screenshot](screenshot.png)
 
 Usage
 -----
