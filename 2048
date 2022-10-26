@@ -9,6 +9,7 @@
 board=()  # the gameboard, as a 1D array
 colors=() # colors for numbers
 moves=0   # number of moves
+won=false # user has won
 
 usage() {
 	local prog=${0##*/}
@@ -20,6 +21,7 @@ usage() {
 	  -b          disable color output, b for boring!
 	  -g <goal>   the goal piece, defaults to $goal
 	  -h          print this message and exit
+	  -k          keep playing after winning
 	  -s <size>   the size of the board, defaults to $size
 	EOF
 }
@@ -28,12 +30,14 @@ animation=false
 color=true
 goal=2048
 size=4
-while getopts 'abg:hs:' option; do
+keepgoing=false
+while getopts 'abg:hks:' option; do
 	case "$option" in
 		a) animation=true;;
 		b) color=false;;
 		g) goal=$OPTARG;;
 		h) usage; exit 0;;
+		k) keepgoing=true;;
 		s) size=$OPTARG;;
 		*) usage >&2; exit 1;;
 	esac
@@ -402,7 +406,8 @@ have_moves_left() {
 win() {
 	print_board
 	echo "congratulations! you won in $moves moves"
-	exit 0
+	won=true
+	$keepgoing || exit 0
 }
 
 lose() {
@@ -435,7 +440,7 @@ while true; do
 	# check for win
 	for ((i = 0; i < size*size; i++)); do
 		if ((${board[i]:-0} == goal)); then
-			win
+			$won || win
 		fi
 	done
 

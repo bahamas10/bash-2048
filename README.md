@@ -18,6 +18,7 @@ Usage
       -b          disable color output, b for boring!
       -g <goal>   the goal piece, defaults to 2048
       -h          print this message and exit
+      -k          keep playing after winning
       -s <size>   the size of the board, defaults to 4
 
 External Utilities
